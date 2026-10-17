@@ -1,0 +1,8 @@
+# 避免把密钥与网关配置送进构建上下文
+.env
+.env.local
+.env.*.local
+app.conf
+*.pem
+*.key
+*.crt

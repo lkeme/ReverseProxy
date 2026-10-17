@@ -1,0 +1,120 @@
+# [模板] acme.sh 实例公共定义 (每个 DNS 账号一个实例)
+# 锚点包含各账号完全一致的字段; 容器名/凭证文件/数据目录按账号各异, 在具体服务中声明
+# [Note] 新增账号用 scripts/add_account.sh 自动生成 (写入 override 文件, 不改动本文件)
+# [Rule] 本锚点内的字段会被 add_account.sh 原样提取并展开到 override 里,
+#        因此必须"自包含": 不要引用其他锚点/别名 (展开后别名在新文件里会失效)。
+# [Note] 上面的 ${TZ:-Asia/Shanghai} 不属于该限制: 它是 compose 插值 (主文件与
+#        override 都读同一个 .env), 展开到 override 后同样生效。
+x-acme-account: &acme-account
+  image: neilpang/acme.sh:latest
+  restart: always
+  environment:
+    - TZ=${TZ:-Asia/Shanghai}
+    - LE_CONFIG_HOME=/acme_config # [Data Separation] 独立数据目录 = 独立续期记录/凭证, 账号间互不覆盖
+  command: daemon # 内置定时任务, 每天检查 4 次并按需续期
+  labels:
+    - "com.centurylinklabs.watchtower.enable=true"
+  # [Log] 限制日志大小, 防止占满磁盘 (通过 docker logs 查看)
+  logging:
+    driver: "json-file"
+    options:
+      max-size: "10m"
+      max-file: "3"
+  # [Resource] 资源限制, 防止内存泄漏卡死宿主机
+  deploy:
+    resources:
+      limits:
+        cpus: '0.5'
+        memory: 128M
+
+services:
+  # [Core] Nginx 反向代理网关
+  nginx:
+    image: nginx:latest
+    container_name: gateway_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    extra_hosts:
+      # [Compat] 让 Linux 宿主机也能解析 host.docker.internal (Template-Host 依赖)
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # 挂载子项目的 Nginx 配置文件 (这是"即插即用"的关键)
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      # 挂载证书目录 (所有项目共享证书)
+      - ./nginx/ssl:/etc/nginx/ssl
+      # 静态文件目录 (默认不对外提供; 需要时在站点 conf 里 root 到这里)
+      - ./nginx/html:/usr/share/nginx/html
+    networks:
+      - proxy_net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    # [Log] 限制日志大小, 防止占满磁盘 (通过 docker logs 查看)
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # [Resource] 限制资源, 防止内存泄漏卡死宿主机
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+
+  # [Core] acme.sh 证书管理器 (Daemon模式) - 主账号 (main)
+  # 更多账号: ./scripts/add_account.sh <账号名> (自动写入 override 文件, 免手改本文件)
+  acme_main:
+    <<: *acme-account
+    container_name: gateway_acme_main
+    env_file:
+      - .env # 公共配置 (ACME_EMAIL / ACME_SERVER)
+      - accounts/main.env # 主账号 DNS Token
+    volumes:
+      - ./nginx/ssl:/etc/nginx/ssl # 为了把证书写给 Nginx 用
+      - ./acme/main:/acme_config # [Bind Mount] 宿主机直接管理数据
+      - /var/run/docker.sock:/var/run/docker.sock # 用于重载 nginx
+
+  # [Tool] 自动更新 (仅更新带 label 的容器, 含自身)
+  watchtower:
+    # https://github.com/nicholas-fedor/watchtower
+    image: nickfedor/watchtower:latest
+    container_name: gateway_watchtower
+    restart: always
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/localtime:/etc/localtime:ro # [Fix] 调度模式必须挂载宿主时区
+    # [Note] 分钟刻意错开整点: 官方文档建议避开 :00, 各家镜像仓库在整点前后
+    #        更新元数据, 此时拉取容易拿到空结果。
+    command: --cleanup --schedule "0 17 4 * * *" --label-enable
+    # [Note] --label-enable 下只看带 label 的容器。下面的 label 是 Watchtower 识别
+    #        "这是同类容器" 的依据, 缺了它就无法自我更新。
+    # [Note] docker ps 里显示的 8080/tcp 来自镜像自带的 EXPOSE 声明 (Watchtower 的
+    #        HTTP API 端口, 本方案未启用), 并未映射到宿主机, 外部不可访问;
+    #        镜像层元数据无法在 compose 里移除, 属正常显示。
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+    # [Log] 限制日志大小
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # [Resource] 资源限制
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+
+networks:
+  # 业务项目接入的公共网络 (所有模板均引用 proxy_net)
+  # [Note] bridge 网络本身即允许独立容器临时加入调试 (attachable 仅对 overlay 有意义)
+  proxy_net:
+    name: proxy_net
+    driver: bridge

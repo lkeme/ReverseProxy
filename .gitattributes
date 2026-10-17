@@ -1,0 +1,22 @@
+# 统一行尾, 防止 Windows 检出破坏 Linux 侧脚本/配置 (统一 LF)
+* text=auto eol=lf
+
+# 明确强制 LF 的关键类型
+*.sh     text eol=lf
+*.conf   text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.md     text eol=lf
+*.env    text eol=lf
+*.env.*  text eol=lf
+Dockerfile text eol=lf
+.gitignore text eol=lf
+.gitkeep text eol=lf
+
+# 二进制文件不做转换
+*.pem  binary
+*.key  binary
+*.crt  binary
+*.csr  binary
+*.p12  binary
+*.pfx  binary

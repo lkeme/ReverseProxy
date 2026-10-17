@@ -1,0 +1,33 @@
+services:
+  my-build-app:
+    build: . # [Modify] 使用当前目录的 Dockerfile 构建
+    container_name: my_build_container # [Modify] 唯一名称
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      # [Modify] 需要持久化数据时取消注释
+      # - ./data:/app/data
+    networks:
+      - proxy_net
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true" # [Add] 允许被网关自动更新
+    # [Log] 限制日志大小
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # [Resource] 资源限制 (根据业务调整)
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+
+networks:
+  # 必须加入网关网络，否则 Nginx 连不上
+  proxy_net:
+    external: true
